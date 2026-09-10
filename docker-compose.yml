@@ -13,14 +13,12 @@ services:
     tty: true
 
   spark:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.1
     container_name: benchmark-spark
-    environment:
-      - SPARK_MODE=master
     working_dir: /app
     volumes:
       - ./:/app
     ports:
-      - "8080:8080"
       - "4040:4040"
+    command: ["tail", "-f", "/dev/null"]
     tty: true
