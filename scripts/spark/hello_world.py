@@ -4,4 +4,4 @@ spark = SparkSession.builder.appName("hello-world").getOrCreate()
 
 df = spark.createDataFrame([("Luiz",)], ["nome"])
 
-df.show
+df.show()
