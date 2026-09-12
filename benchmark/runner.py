@@ -95,7 +95,22 @@ def run_combo(tool: str, dataset_key: str, dataset_path: Path, operation: str):
         print(f"    [ERROR] process printed no result. stderr: {stderr.strip()[-500:]}")
         return None
 
-    payload = json.loads(stdout_lines[-1])
+    # On Windows, py4j kills the Spark JVM process tree via taskkill on exit,
+    # which prints extra "SUCCESS: ..." lines to stdout AFTER the JSON line.
+    # So we scan from the end for the last line that is actually valid JSON,
+    # instead of assuming it's always the very last line.
+    payload = None
+    for line in reversed(stdout_lines):
+        try:
+            payload = json.loads(line)
+            break
+        except json.JSONDecodeError:
+            continue
+
+    if payload is None:
+        print(f"    [ERROR] no valid JSON found in stdout: {stdout.strip()[-500:]}")
+        return None
+
     payload["dataset_key"] = dataset_key
     payload["peak_memory_mb"] = round(mem_out.get("peak_bytes", 0) / (1024 * 1024), 1)
     payload["timestamp"] = datetime.now(timezone.utc).isoformat()

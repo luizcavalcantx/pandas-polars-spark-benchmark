@@ -1,2 +1,6 @@
 data/synthetic/*.parquet
 data/public/*.parquet
+
+__pycache__/
+*.pyc
+benchmark/results/*.csv
