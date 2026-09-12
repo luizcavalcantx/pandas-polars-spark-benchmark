@@ -31,9 +31,9 @@ def op_join (df, customers, products):
 
 def op_window(df, customers, products):
     result = df.copy()
-    # rank do valor do pedido dentro de cada regiao
+    # rank of the order value within each region
     result["rank_in_region"] = result.groupby("region")["total_amount"].rank(method="dense", ascending=False)
-    # gasto acumulado por cliente, ordenado no tempo
+    # cumulative spend per customer, ordered over time
     result = result.sort_values(["customer_id", "order_date"])
     result["customer_cum_spend"] = result.groupby("customer_id")["total_amount"].cumsum()
     return result

@@ -1,50 +1,50 @@
 """
-Gerador de dados sinteticos para o benchmark Pandas vs Polars vs Spark.
+Synthetic data generator for the Pandas vs Polars vs Spark benchmark.
 
-Tem DOIS subcomandos:
+Has TWO subcommands:
 
-  dimensions  -> gera as tabelas de dimensao (dim_customers, dim_products),
-                 usadas no benchmark de JOIN. Rode uma unica vez; sao
-                 reaproveitadas por todos os volumes da tabela fato.
+  dimensions  -> generates the dimension tables (dim_customers, dim_products),
+                 used in the JOIN benchmark. Run it once; they are
+                 reused by all fact table volumes.
 
-  fact        -> gera a tabela fato "sales_transactions" em Parquet, em
-                 chunks, suportando volumes de 1M ate 200M+ linhas sem
-                 estourar a RAM.
+  fact        -> generates the "sales_transactions" fact table in Parquet, in
+                 chunks, supporting volumes from 1M to 200M+ rows without
+                 blowing up RAM.
 
 Schema (sales_transactions):
-    order_id         int64    - chave primaria, sequencial
-    order_date       date32   - usado em sort / window (partition by + order by)
-    customer_id      int32    - FK para dim_customers, usado em join e groupby
-    product_id       int32    - FK para dim_products, usado em join
-    store_id         int16    - usado em groupby
-    region           string   - baixa cardinalidade, usado em filter/groupby
-    payment_method   string   - baixa cardinalidade, usado em filter/groupby
-    channel          string   - baixa cardinalidade, usado em filter/groupby
-    status           string   - baixa cardinalidade, usado em filter (ex: status == 'completed')
+    order_id         int64    - primary key, sequential
+    order_date       date32   - used in sort / window (partition by + order by)
+    customer_id      int32    - FK to dim_customers, used in join and groupby
+    product_id       int32    - FK to dim_products, used in join
+    store_id         int16    - used in groupby
+    region           string   - low cardinality, used in filter/groupby
+    payment_method   string   - low cardinality, used in filter/groupby
+    channel          string   - low cardinality, used in filter/groupby
+    status           string   - low cardinality, used in filter (e.g. status == 'completed')
     quantity         int16
     unit_price       float32
     discount_pct     float32
     total_amount     float32  - quantity * unit_price * (1 - discount_pct)
-    customer_name    string   - usado em string ops (split, upper/lower, contains)
-    customer_email   string   - usado em string ops (extrair dominio, regex)
+    customer_name    string   - used in string ops (split, upper/lower, contains)
+    customer_email   string   - used in string ops (extract domain, regex)
 
-Uso:
-    # 1) tabelas de dimensao (uma vez so)
+Usage:
+    # 1) dimension tables (only once)
     python generate_synthetic_data.py dimensions --out-dir data/synthetic/
 
-    # 2) tabela fato, um volume por vez
+    # 2) fact table, one volume at a time
     python generate_synthetic_data.py fact --rows 1_000_000   --out data/synthetic/sales_1m.parquet
     python generate_synthetic_data.py fact --rows 10_000_000  --out data/synthetic/sales_10m.parquet
     python generate_synthetic_data.py fact --rows 50_000_000  --out data/synthetic/sales_50m.parquet  --chunk-size 5_000_000
     python generate_synthetic_data.py fact --rows 200_000_000 --out data/synthetic/sales_200m.parquet --chunk-size 5_000_000
 
-Observacoes:
-    - Para 50M/200M linhas, use --chunk-size para controlar o pico de RAM
-      (cada chunk e materializado em memoria e depois descartado).
-    - O arquivo final e um UNICO .parquet (multiplos row groups), o que
-      facilita comparar leitura/scan entre Pandas, Polars e Spark.
-    - Use --seed para reprodutibilidade (cada chunk usa um seed derivado,
-      entao o resultado nao muda dependendo do --chunk-size escolhido).
+Notes:
+    - For 50M/200M rows, use --chunk-size to control the peak RAM
+      (each chunk is materialized in memory and then discarded).
+    - The final file is a SINGLE .parquet (multiple row groups), which
+      makes it easier to compare read/scan performance between Pandas, Polars and Spark.
+    - Use --seed for reproducibility (each chunk uses a derived seed,
+      so the result doesn't change depending on the chosen --chunk-size).
 """
 import argparse
 import time
@@ -55,15 +55,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 # ---------------------------------------------------------------------------
-# Dominios fixos (compartilhados entre dimensions e fact)
+# Fixed domains (shared between dimensions and fact)
 # ---------------------------------------------------------------------------
 N_CUSTOMERS = 2_000_000
 N_PRODUCTS = 5_000
 N_STORES = 500
 
-REGIONS = np.array(["Norte", "Nordeste", "Centro-Oeste", "Sudeste", "Sul"])
+REGIONS = np.array(["North", "Northeast", "Midwest", "Southeast", "South"])
 PAYMENT_METHODS = np.array(["credit_card", "debit_card", "pix", "boleto", "cash"])
-CHANNELS = np.array(["online", "loja_fisica", "marketplace"])
+CHANNELS = np.array(["online", "physical_store", "marketplace"])
 STATUSES = np.array(["completed", "cancelled", "returned", "pending"])
 STATUS_WEIGHTS = np.array([0.80, 0.08, 0.07, 0.05])
 DISCOUNTS = np.array([0.0, 0.05, 0.10, 0.15, 0.20, 0.30], dtype=np.float32)
@@ -87,10 +87,10 @@ COUNTRIES = np.array(["BR", "PT", "AR", "US", "CL"])
 SEGMENTS = np.array(["consumer", "small_business", "enterprise"])
 SEGMENT_WEIGHTS = np.array([0.70, 0.22, 0.08])
 PRODUCT_CATEGORIES = np.array([
-    "eletronicos", "moda", "casa_e_decoracao", "esporte_e_lazer",
-    "livros", "beleza", "alimentos", "brinquedos", "informatica", "pet_shop",
+    "electronics", "fashion", "home_and_decor", "sports_and_leisure",
+    "books", "beauty", "food", "toys", "computing", "pet_shop",
 ])
-SUPPLIERS = np.array([f"fornecedor_{i:03d}" for i in range(1, 51)])
+SUPPLIERS = np.array([f"supplier_{i:03d}" for i in range(1, 51)])
 
 FACT_SCHEMA = pa.schema([
     ("order_id", pa.int64()),
@@ -120,7 +120,7 @@ DIM_DATE_RANGE_DAYS = int((DIM_DATE_END - DIM_DATE_START).astype(int))
 
 
 # ---------------------------------------------------------------------------
-# Subcomando: dimensions
+# Subcommand: dimensions
 # ---------------------------------------------------------------------------
 def build_customers(rng: np.random.Generator) -> pa.Table:
     customer_id = np.arange(1, N_CUSTOMERS + 1, dtype=np.int32)
@@ -144,7 +144,7 @@ def build_products(rng: np.random.Generator) -> pa.Table:
     category = PRODUCT_CATEGORIES[rng.integers(0, len(PRODUCT_CATEGORIES), size=N_PRODUCTS)]
     supplier = SUPPLIERS[rng.integers(0, len(SUPPLIERS), size=N_PRODUCTS)]
     base_price = rng.uniform(9.90, 899.90, size=N_PRODUCTS).astype(np.float32)
-    product_name = np.array([f"{cat}_produto_{pid:05d}" for cat, pid in zip(category, product_id)])
+    product_name = np.array([f"{cat}_product_{pid:05d}" for cat, pid in zip(category, product_id)])
 
     return pa.table({
         "product_id": product_id,
@@ -162,15 +162,15 @@ def run_dimensions(args):
 
     customers = build_customers(rng)
     pq.write_table(customers, out_dir / "dim_customers.parquet", compression="zstd")
-    print(f"dim_customers.parquet -> {customers.num_rows:,} linhas")
+    print(f"dim_customers.parquet -> {customers.num_rows:,} rows")
 
     products = build_products(rng)
     pq.write_table(products, out_dir / "dim_products.parquet", compression="zstd")
-    print(f"dim_products.parquet  -> {products.num_rows:,} linhas")
+    print(f"dim_products.parquet  -> {products.num_rows:,} rows")
 
 
 # ---------------------------------------------------------------------------
-# Subcomando: fact
+# Subcommand: fact
 # ---------------------------------------------------------------------------
 def generate_fact_chunk(rng: np.random.Generator, start_id: int, size: int) -> pa.Table:
     order_id = np.arange(start_id, start_id + size, dtype=np.int64)
@@ -236,7 +236,7 @@ def run_fact(args):
     remaining = total
     t0 = time.time()
 
-    print(f"Gerando {total:,} linhas em {n_chunks} chunk(s) de ate {chunk_size:,} -> {out_path}")
+    print(f"Generating {total:,} rows in {n_chunks} chunk(s) of up to {chunk_size:,} -> {out_path}")
 
     for i in range(n_chunks):
         size = min(chunk_size, remaining)
@@ -254,28 +254,28 @@ def run_fact(args):
         remaining -= size
         elapsed = time.time() - t0
         done = total - remaining
-        print(f"  chunk {i + 1}/{n_chunks}: {done:,}/{total:,} linhas ({elapsed:.1f}s)")
+        print(f"  chunk {i + 1}/{n_chunks}: {done:,}/{total:,} rows ({elapsed:.1f}s)")
 
     if writer is not None:
         writer.close()
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
-    print(f"Concluido em {time.time() - t0:.1f}s. Arquivo: {out_path} ({size_mb:.1f} MB)")
+    print(f"Done in {time.time() - t0:.1f}s. File: {out_path} ({size_mb:.1f} MB)")
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Gera dados sinteticos (dimensoes + fato) para o benchmark")
+    parser = argparse.ArgumentParser(description="Generates synthetic data (dimensions + fact) for the benchmark")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_dim = subparsers.add_parser("dimensions", help="Gera dim_customers.parquet e dim_products.parquet")
+    p_dim = subparsers.add_parser("dimensions", help="Generates dim_customers.parquet and dim_products.parquet")
     p_dim.add_argument("--out-dir", type=str, required=True)
     p_dim.add_argument("--seed", type=int, default=7)
     p_dim.set_defaults(func=run_dimensions)
 
-    p_fact = subparsers.add_parser("fact", help="Gera a tabela fato sales_transactions.parquet")
+    p_fact = subparsers.add_parser("fact", help="Generates the sales_transactions.parquet fact table")
     p_fact.add_argument("--rows", type=int, required=True)
     p_fact.add_argument("--out", type=str, required=True)
     p_fact.add_argument("--chunk-size", type=int, default=2_000_000)

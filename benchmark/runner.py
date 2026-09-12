@@ -1,20 +1,20 @@
 """
-Orquestra a execucao do benchmark.
+Orchestrates the benchmark execution.
 
-Para cada combinacao (tool, dataset, operacao), roda o script
-scripts/<tool>/operations.py EM UM PROCESSO SEPARADO (subprocess) -- isso e
-importante por dois motivos:
-  1. O Spark sobe sua propria JVM; rodar tudo no mesmo processo Python
-     misturaria o overhead/memoria da JVM com o das outras ferramentas.
-  2. Isolamento de memoria: assim o pico de RAM medido para uma operacao
-     nao inclui "sobras" (garbage nao coletado) de operacoes anteriores.
+For each combination (tool, dataset, operation), runs the script
+scripts/<tool>/operations.py IN A SEPARATE PROCESS (subprocess) -- this is
+important for two reasons:
+  1. Spark spins up its own JVM; running everything in the same Python
+     process would mix the JVM's overhead/memory with that of the other tools.
+  2. Memory isolation: this way the peak RAM measured for an operation
+     doesn't include "leftovers" (uncollected garbage) from previous operations.
 
-Mede tempo (retornado pelo proprio script filho, via harness.py) e pico de
-memoria (RSS do processo + filhos, via psutil, amostrado em uma thread
-enquanto o processo roda). Salva tudo, linha a linha, em
+Measures time (returned by the child script itself, via harness.py) and peak
+memory (RSS of the process + children, via psutil, sampled in a thread
+while the process runs). Saves everything, line by line, to
 benchmark/results/results.csv.
 
-Uso:
+Usage:
     python benchmark/runner.py
     python benchmark/runner.py --tools pandas polars --datasets 1m 10m
     python benchmark/runner.py --operations filter groupby --datasets 1m
@@ -46,7 +46,7 @@ SCRIPT_MAP = {
 
 
 def _monitor_peak_memory(pid: int, stop_event: threading.Event, out: dict, interval: float = 0.05):
-    """Amostra RSS (processo + filhos, ex.: JVM do Spark) ate stop_event ser sinalizado."""
+    """Samples RSS (process + children, e.g. Spark's JVM) until stop_event is signaled."""
     peak = 0
     try:
         proc = psutil.Process(pid)
@@ -87,12 +87,12 @@ def run_combo(tool: str, dataset_key: str, dataset_path: Path, operation: str):
     watcher.join(timeout=2)
 
     if proc.returncode != 0:
-        print(f"    [ERRO] {stderr.strip()[-800:]}")
+        print(f"    [ERROR] {stderr.strip()[-800:]}")
         return None
 
     stdout_lines = [line for line in stdout.strip().splitlines() if line.strip()]
     if not stdout_lines:
-        print(f"    [ERRO] processo nao imprimiu resultado. stderr: {stderr.strip()[-500:]}")
+        print(f"    [ERROR] process printed no result. stderr: {stderr.strip()[-500:]}")
         return None
 
     payload = json.loads(stdout_lines[-1])
@@ -103,7 +103,7 @@ def run_combo(tool: str, dataset_key: str, dataset_path: Path, operation: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Roda o benchmark Pandas vs Polars vs Spark")
+    parser = argparse.ArgumentParser(description="Runs the Pandas vs Polars vs Spark benchmark")
     parser.add_argument("--tools", nargs="+", default=TOOLS, choices=TOOLS)
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS.keys()), choices=list(DATASETS.keys()))
     parser.add_argument("--operations", nargs="+", default=OPERATIONS, choices=OPERATIONS)
@@ -129,7 +129,7 @@ def main():
         for dataset_key in args.datasets:
             dataset_path = DATASETS[dataset_key]
             if not dataset_path.exists():
-                print(f"[AVISO] dataset '{dataset_key}' nao encontrado em {dataset_path}, pulando")
+                print(f"[WARNING] dataset '{dataset_key}' not found at {dataset_path}, skipping")
                 continue
 
             for operation in args.operations:
@@ -156,7 +156,7 @@ def main():
                     f.flush()
                     print(f"    min={row['min_time_sec']}s  mean={row['mean_time_sec']}s  peak_mem={row['peak_memory_mb']}MB")
 
-    print(f"\nResultados salvos em {RESULTS_CSV}")
+    print(f"\nResults saved to {RESULTS_CSV}")
 
 
 if __name__ == "__main__":

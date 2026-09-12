@@ -1,24 +1,24 @@
 """
-Harness compartilhado pelos 3 scripts de operacoes (scripts/pandas,
-scripts/polars, scripts/spark). Cada um desses scripts so precisa fornecer:
+Harness shared by the 3 operations scripts (scripts/pandas,
+scripts/polars, scripts/spark). Each of these scripts only needs to provide:
 
-    OPERATIONS   dict: nome_da_operacao -> funcao(df, customers, products) -> resultado
-    load_fact    funcao(path) -> dados carregados na estrutura da ferramenta
-    load_dims    funcao(customers_path, products_path) -> (customers, products)
-    count_rows   funcao(resultado) -> int (forca a materializacao em engines lazy, ex.: Spark)
+    OPERATIONS   dict: operation_name -> function(df, customers, products) -> result
+    load_fact    function(path) -> data loaded into the tool's structure
+    load_dims    function(customers_path, products_path) -> (customers, products)
+    count_rows   function(result) -> int (forces materialization in lazy engines, e.g. Spark)
 
-O harness cuida do resto: le os argumentos da linha de comando, roda
-warm-up (nao cronometrado), roda N repeticoes cronometradas e imprime o
-resultado como UMA linha de JSON em stdout -- e assim que o
-benchmark/runner.py le o resultado de cada processo filho.
+The harness takes care of the rest: reads the command-line arguments, runs
+warm-up (not timed), runs N timed repeats and prints the
+result as ONE line of JSON to stdout -- this is how
+benchmark/runner.py reads the result of each child process.
 
-Por que contar as linhas DENTRO do bloco cronometrado:
-    Pandas e Polars (no modo eager usado aqui) ja materializam o resultado
-    ao rodar a operacao. O Spark, por padrao, e "preguicoso" (lazy) -- as
-    transformacoes so sao realmente executadas quando uma acao (como
-    .count()) e chamada. Colocando count_rows() dentro do tempo medido,
-    garantimos que TODAS as ferramentas sejam cronometradas pelo mesmo
-    criterio: "tempo ate o resultado estar pronto de verdade".
+Why count the rows INSIDE the timed block:
+    Pandas and Polars (in the eager mode used here) already materialize the result
+    when running the operation. Spark, by default, is "lazy" -- the
+    transformations are only actually executed when an action (like
+    .count()) is called. By placing count_rows() inside the measured time, we
+    ensure ALL tools are timed by the same
+    criterion: "time until the result is actually ready".
 """
 import argparse
 import json
@@ -26,7 +26,7 @@ import time
 
 
 def run_cli(tool_name, operations, load_fact, load_dims, count_rows):
-    parser = argparse.ArgumentParser(description=f"Roda uma operacao do benchmark com {tool_name}")
+    parser = argparse.ArgumentParser(description=f"Runs a benchmark operation with {tool_name}")
     parser.add_argument("--operation", required=True, choices=list(operations.keys()))
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--dim-customers", required=True)
@@ -41,8 +41,8 @@ def run_cli(tool_name, operations, load_fact, load_dims, count_rows):
 
     op_fn = operations[args.operation]
 
-    # warm-up: garante que imports tardios, JIT, cache de arquivo em disco
-    # etc. nao distorcam a primeira medicao
+    # warm-up: ensures late imports, JIT, on-disk file cache
+    # etc. don't skew the first measurement
     for _ in range(args.warmup):
         result = op_fn(df, customers, products)
         count_rows(result)
