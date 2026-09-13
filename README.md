@@ -12,7 +12,8 @@ Understand, with real execution data, the limits and strengths of each tool as d
 - **Transformations tested**: `filter`, `groupby`, `join`, `window`, `sort`, `string_ops`, and a combined `pipeline` (filter → join → groupby → sort) — one implementation per tool under [scripts/](scripts/).
 - **Execution**: each combination (tool × operation × dataset) runs in its own subprocess, with 1 warm-up run followed by 3 timed repeats; [benchmark/runner.py](benchmark/runner.py) orchestrates this and appends every result to [benchmark/results/results.csv](benchmark/results/results.csv).
 - **Metrics collected**: execution time (best/mean of the timed repeats) and peak resident memory (RSS of the process + children, sampled via `psutil` while it runs).
-- **Environment**: a [docker-compose.yml](docker-compose.yml) is provided to run each tool in an isolated container; the results below were collected running natively on Windows (Python 3.11, JDK 17 for PySpark 3.5.1's local JVM).
+- **Environment**: a [docker-compose.yml](docker-compose.yml) is provided to run each tool in an isolated container; the results below were collected running natively on Windows (Python 3.11, JDK 17 for PySpark 3.5.1's local JVM), on a machine with **16 GB of RAM**.
+- **200M rows is Spark-only.** Pandas and Polars already peak at ~13-14 GB RSS at 50M rows (see [Results](#-results) below); running either of them on 200M rows on a 16 GB machine would almost certainly exceed available memory and crash the process (or the OS would start swapping/OOM-killing well before that). Spark's lazy, spill-to-disk execution model doesn't have that ceiling, so 200M was only run with `--tools spark`.
 
 ## 📁 Repository structure
 
@@ -30,7 +31,7 @@ Understand, with real execution data, the limits and strengths of each tool as d
 │   └── results/
 │       └── results.csv    # one row per (tool, dataset, operation) run
 ├── analysis/
-│   └── results_analysis.ipynb   # comparative analysis and charts
+│   └── analysis.ipynb     # comparative analysis and charts
 ├── check_parquet.py       # quick row-count/size check for generated .parquet files
 ├── requirements.txt
 └── docker-compose.yml
@@ -55,10 +56,16 @@ python benchmark/runner.py --datasets 200m --tools spark        # e.g. skip Pand
 python benchmark/runner.py --tools pandas polars --datasets 1m 10m --operations filter groupby
 
 # 4) view the analysis
-jupyter notebook analysis/results_analysis.ipynb
+jupyter notebook analysis/analysis.ipynb
 ```
 
 Requires a JDK on `PATH`/`JAVA_HOME` for the Spark runs (PySpark launches a local JVM via py4j).
+
+[analysis/analysis.ipynb](analysis/analysis.ipynb) loads `results.csv`, de-duplicates re-runs (keeping the latest by timestamp per `tool`/`dataset`/`operation`), then charts:
+- **mean time** and **peak memory**, one chart per operation, tool vs. dataset volume;
+- **average time** and **average memory** across all operations, one summary chart per metric.
+
+All charts use a fixed color per tool and a **log-scaled axis**, since both time and memory span multiple orders of magnitude across volumes — see the note on Spark's memory below. Every chart is also saved as a `.png` under [benchmark/results/](benchmark/results/) when the notebook runs.
 
 ## 📊 Results
 
@@ -102,16 +109,26 @@ Best of 3 timed repeats, in seconds, after 1 warm-up run. Full data (including m
 
 ### 200M rows
 
-_(pending — planned as a Spark-only run: `python benchmark/runner.py --datasets 200m --tools spark`, since Pandas/Polars peak memory already approaches ~14 GB at 50M rows)_
+Spark only — Pandas and Polars were not run at this volume (see the note on RAM in [Methodology](#-methodology)).
+
+| Operation | Spark (s) | Spark peak memory (MB) |
+|---|---|---|
+| filter | 2.091 | 2060.1 |
+| groupby | 4.508 | 1626.5 |
+| join | 6.170 | 1909.1 |
+| window | 0.595 | 852.2 |
+| sort | 0.566 | 938.7 |
+| string_ops | 0.579 | 814.6 |
+| pipeline | 15.716 | 2765.1 |
 
 ## 🔍 Main conclusions
 
 - **At 1M rows, Polars wins almost everything** — its multi-threaded, Rust-based execution beats Pandas across the board, while Spark is consistently the slowest tool here: its fixed JVM/driver startup cost dominates when there isn't enough data to amortize it.
 - **Pandas scales the worst.** Operations that touch every row with Python-level overhead (`window`, `sort`, `string_ops`) grow far faster than the data: `string_ops` goes from 2.4s (1M) to 428s (50M), a ~180x slowdown for a 50x increase in rows.
-- **Spark's execution time barely moves with volume** for `window`, `sort` and `string_ops` (~0.3-0.4s from 1M all the way to 50M rows), since its cost there is dominated by fixed overhead rather than row count — this is exactly the regime where its parallel, JVM-based engine pays off.
-- **The crossover happens between 10M and 50M rows.** At 10M, Polars is still fastest for most operations; by 50M, Spark leads on every operation except `groupby` (Polars) — including a ~110x margin over Pandas on `window` and ~1450x on `string_ops`.
-- **Peak memory tells the same story.** Pandas and Polars both approach ~13-14 GB RSS at 50M rows (their eager, in-memory model keeps growing with the dataset), while Spark stays under ~2.6 GB thanks to its lazy, spill-capable execution — a strong signal Pandas/Polars won't survive the 200M-row run without chunking, while Spark should handle it comfortably.
-- **Practical takeaway**: for exploratory work or datasets that comfortably fit in RAM (roughly up to 10-20M rows on this machine), Polars is the best default — faster than Pandas with a near-identical API. Once a dataset's peak memory starts approaching available RAM, or an operation involves heavy row-wise work (`window`, `sort`, string transforms) at tens of millions of rows or more, Spark becomes the safer and ultimately faster choice.
+- **Spark's execution time barely moves with volume** for `window`, `sort` and `string_ops` — it stays in the ~0.3-0.6s range from 1M all the way to 200M rows, since its cost there is dominated by fixed overhead rather than row count. This is exactly the regime where its parallel, JVM-based engine pays off, and it holds all the way to 200M: `window`/`sort`/`string_ops` at 200M (0.60s / 0.57s / 0.58s) are barely slower than at 1M (0.32s / 0.26s / 0.27s) despite 200x more rows.
+- **The crossover happens between 10M and 50M rows.** At 10M, Polars is still fastest for most operations; by 50M, Spark leads on every operation except `groupby` (Polars) — including a ~110x margin over Pandas on `window` and ~1450x on `string_ops`. `filter`, `groupby`, `join` and `pipeline` do grow with volume for Spark too (e.g. `pipeline`: 1.1s → 15.7s from 1M to 200M) — they involve shuffles/joins whose cost scales with data size — but even so, Spark's growth is far shallower than Pandas/Polars', and it's the only tool that completes all seven operations at 200M rows at all.
+- **Peak memory tells the same story, but reading it needs a log scale.** On a linear chart, Spark's memory looks flat — it's not; it's just small next to Pandas/Polars. Spark's peak RSS does grow with volume (e.g. `filter`: 824 MB at 1M → 2060 MB at 200M), just far more slowly than Pandas/Polars (which reach ~13-14 GB at 50M and were not safe to run at 200M at all). Three architectural reasons: (1) a fixed `spark.driver.memory=4g` JVM heap is largely allocated upfront regardless of data size, creating a high floor that dwarfs the incremental cost per row; (2) Spark processes data in partitions rather than materializing the whole dataset at once, so peak memory tracks partition size, not total row count; (3) it can spill partitions to disk instead of holding everything in RAM. Pandas and Polars, by contrast, load the entire table into a contiguous in-memory structure (eager model), so their memory grows almost linearly with row count. The [analysis notebook](analysis/analysis.ipynb)'s average-memory chart uses a log-scaled axis specifically to make Spark's real (small) growth visible instead of flattening it to zero next to the other two.
+- **Practical takeaway**: for exploratory work or datasets that comfortably fit in RAM (roughly up to 10-20M rows on a 16 GB machine), Polars is the best default — faster than Pandas with a near-identical API. Once a dataset's peak memory starts approaching available RAM, or an operation involves heavy row-wise work (`window`, `sort`, string transforms) at tens of millions of rows or more, Spark becomes the safer and ultimately faster choice — and past a certain size (here, ~50-200M rows on 16 GB), it stops being just "faster" and becomes the only tool that can run the job at all.
 
 ## 🛠️ Stack
 
